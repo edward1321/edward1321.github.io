@@ -1,0 +1,218 @@
+```{r}
+library(readr)
+library(tidyverse)
+library(tidymodels)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(janitor)
+library(parallel)  
+library(doParallel)
+library(ggplot2)
+library(skimr)
+```
+
+# Final Setup
+```{r}
+data <- readRDS("/Users/kephi/Desktop/Wake Forest Baseball Analytcs/tmAll_ACCSEC copy.RDS")
+
+data <- data %>% 
+  filter(BatterTeam == "WAK_DEA")
+
+data <- data %>%
+  mutate(AB_end_true = lead(PitchofPA))
+
+data$PitchofPA <- as.numeric(data$PitchofPA)
+
+data$QAB <- ifelse(data$PlayResult == "Walk" |
+                     data$PlayResult == "HitByPitch" | 
+                     data$PlayResult == "Single" |
+                     data$PlayResult == "Double" |
+                     data$PlayResult == "Triple" |
+                     data$PlayResult == "HomeRun" | 
+                     data$PlayResult == "Sacrifice" & data$AB_Result == "Sacrifice (Bunt)" |
+                     data$AB_end_true == 1 & data$PitchofPA >= 7 & data$Swing == TRUE |
+                     data$AB_end_true == 1 & data$ExitSpeed >= 95.00000 & !is.na(data$ExitSpeed) , 1,0)
+
+data1 <- data %>%
+  select(PitchofPA, PlayResult, Swing, ExitSpeed, AB_Result, AB_end_true, QAB)
+
+data1[4000:6000,]
+
+table(data$PlayResult)
+
+
+data$test <- ifelse(data$AB_end_true == 1 &
+                     data$PitchofPA >= 7 &
+                     data$PlayResult == "Ball" & data$PlayResult == "DoublePlay" & data$PlayResult == "Error" & data$PlayResult == "FieldersChoice" & data$PlayResult == "foulBall" & data$PlayResult == "Out" & data$PlayResult == "Sacrifice" & data$PlayResult == "Strike" & data$PlayResult == "Strikeout" &
+                     data$Swing == TRUE, 1,0)
+
+data$test <- ifelse(data$ExitSpeed >= 95.00000 & !is.na(data$ExitSpeed),1,0)
+
+
+data %>%
+  select(PitchofPA, PlayResult, Swing, ExitSpeed, AB_Result, AB_end_true, test)
+
+```
+
+
+
+# data
+```{r}
+data <- readRDS("/Users/kephi/Desktop/Wake Forest Baseball Analytcs/tmAll_ACCSEC copy.RDS") %>% clean_names()
+
+data <- data %>% 
+  filter(batter_team == "WAK_DEA")
+
+n_missing(data$play_result)
+n_missing(data$ab_end)
+n_missing(data$pitchof_pa)
+n_missing(data$swing)
+n_missing(data$hit_type)
+n_missing(data$ab_result)
+
+
+table(data$ab_result)
+# 3000
+
+table(data$tru3)
+
+table(data$play_result)
+
+table(data$hit_type)
+
+
+
+skim(data)
+
+# BB - under tru3 or play_result          done
+# HBP - play_result                       done
+# Hit - under a variety of choices        done
+# Hard hit 95+ - exit_speed               done
+# sac bunt - ab_result                    done
+# Hit and Run -                           cant 
+# move'em - description?                  cant
+# score'em - description?                 cant
+# bunt for hit - ab_result                done
+# 7 pitch ab doesnt end in K looking - pitch of pa and using a play result = strikeout with no swing?
+```
+
+# test mutate
+```{r}
+data1 <- data %>%
+  mutate(AB_end_test = lead(pitchof_pa))
+
+data1 %>%
+  filter(AB_end_test == 1)
+
+data1$pitchof_pa <- as.numeric(data1$pitchof_pa)
+
+data1$QAB <- ifelse(data1$play_result == "Walk" |
+                     data1$play_result == "HitByPitch" | 
+                     data1$play_result == "Single" |
+                     data1$play_result == "Double" |
+                     data1$play_result == "Triple" |
+                     data1$play_result == "HomeRun" | 
+                     data1$play_result == "Sacrifice" & data$ab_result == "Sacrifice (Bunt)" |
+                     data1$AB_end_test == 1 &
+                     data1$pitchof_pa >= 7 &
+                     data1$play_result != "Strikeout" & 
+                     data1$swing != FALSE |
+                     data1$exit_speed %in% 95.00000, 1, 0)
+
+data1$QAB <- as.factor(data1$QAB)
+
+
+data1 %>%
+  select(QAB)
+
+```
+
+
+```{r}
+data$pitchof_pa <- as.numeric(data$pitchof_pa)
+
+data$exit_speed <- as.numeric(data$exit_speed)
+
+data["exit_speed"][is.na(data["exit_speed"])] <- 0
+print(data)
+
+data$QAB <- ifelse(data$play_result == "Walk" | 
+                     data$play_result == "HitByPitch" | 
+                     data$play_result == "Single" |
+                     data$play_result == "Double" |
+                     data$play_result == "Triple" |
+                     data$play_result == "HomeRun" | 
+                     data$play_result == "Sacrifice" & data$ab_result == "Sacrifice (Bunt)" |
+                     data$ab_end == TRUE & 
+                     data$pitchof_pa >= 7 & 
+                     data$play_result != "Strikeout" & 
+                     data$swing != FALSE |
+                     data$exit_speed >= 95.00000, 1, 0) 
+
+data
+
+
+data %>%
+  select(exit_speed, QAB)
+
+
+
+
+n_missing(data$QAB)
+n_missing(data$play_result)
+n_missing(data$ab_end)
+n_missing(data$pitchof_pa)
+n_missing(data$swing)
+n_missing(data$hit_type)
+n_missing(data$ab_result)
+
+
+data %>%
+  select(ab_end)
+
+
+
+
+
+
+```
+
+
+
+```{r}
+data$ab_result == "Sacrifice (Bunt)" |
+                     # covered by single data$ab_result == "Single (Bunt)" |
+                     data$ab_end == TRUE & 
+                     data$pitchof_pa >= 7 & 
+                     data$ab_result != "Strikeout" & 
+                     data$swing != FALSE, 1, 0) 
+
+
+
+data %>%
+  select(pitchof_pa, play_result, ab_result, exit_speed, qab)
+
+# data$qab2 <- ifelse(data$ab_end == TRUE & data$ab_result != "Strikeout" & data$swing != FALSE, 1,0)
+
+
+
+
+data$pitchof_pa <- as.numeric(data$pitchof_pa)
+
+
+# ab_end = True
+# ab_result doesnt = Strikeout
+# swing doesnt equal true
+# pitch_of_pa >= 7
+
+
+# data$qab2 <- ifelse(data$ab_end == TRUE & data$pitchof_pa >= 7 & data$ab_result != "Strikeout" & data$swing != FALSE, 1,0)
+
+
+
+mutate(AB_end_test = lag(PitchofPA))
+ABendTest = 1
+
+```
+

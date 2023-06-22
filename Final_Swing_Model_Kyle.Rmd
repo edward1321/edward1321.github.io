@@ -1,0 +1,329 @@
+# FINAL SWING MODEL - KYLE PHILLIPS
+
+
+# MODEL:
+
+# Libraries needed for the model
+```{r}
+library(readr)
+library(tidyverse)
+library(tidymodels)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(janitor)
+library(parallel)  
+library(doParallel)
+library(ggplot2)
+```
+
+
+# Load data in
+```{r}
+data <- readRDS("/Users/kephi/Desktop/Wake Forest Baseball Analytcs/tmAll_ACCSEC.RDS")
+
+data
+table(data$PitchCall)
+
+table(data$TaggedPitchType)
+```
+
+```{r}
+data9 <- data %>%
+  mutate(type = case_when(Swing == "TRUE" | PitchCall == "StrikeCalled" | PitchCall == "StrikeSwinging" | PitchCall == "InPlay" | PitchCall == "FoulBall" ~ 1, 
+                          Swing == "FALSE" | PitchCall == "BallCalled" | PitchCall == "HitByPitch" | PitchCall == "BattersInterference" | PitchCall == "CatchersInterference" ~ 0))
+
+  
+```
+
+
+```{r}
+data9FB <- data9 %>% filter(TaggedPitchType == "FF" | TaggedPitchType == "FT")
+data9FB %>%
+  group_by(Pitcher,TaggedPitchType) %>%
+  summarise_at(vars(RelSpeed, InducedVertBreak, HorzBreak, VertApprAngle, HorzApprAngle), median, na.rm = TRUE) -> data9_summarize
+data9FB %>%
+  group_by(Pitcher, TaggedPitchType) %>%
+  summarise(Count = n_distinct(PitchUID)) %>%
+  left_join(data9_summarize, by = c("Pitcher", "TaggedPitchType")) -> data9_summarize
+data9_summarize <- data9_summarize %>% slice_max(Count)
+colnames(data9_summarize) <- c("Pitcher", "PitchType", "Count", "FBRelSpeed", "FBInducedVertBreak", "FBHorzBreak", "FBVertApprAngle", "FBHorzApprAngle")
+data9_summarize <- data9_summarize %>% select(-c(PitchType, Count))
+data9 <- left_join(data9, data9_summarize, by = "Pitcher")
+data9$VeloDiff <- data9$RelSpeed - data9$FBRelSpeed
+data9$IVBDiff <- data9$InducedVertBreak - data9$FBInducedVertBreak
+data9$HBDiff <- data9$HorzBreak - data9$FBHorzBreak
+data9$VAADiff <- data9$VertApprAngle - data9$FBVertApprAngle
+data9$HAADiff <- data9$HorzApprAngle - data9$FBHorzApprAngle
+data9 <- data9 %>%
+  mutate(VeloDiff = ifelse(TaggedPitchType == "FF" | TaggedPitchType == "FT", 0, VeloDiff),
+         IVBDiff = ifelse(TaggedPitchType == "FF" | TaggedPitchType == "FT", 0 IVBDiff),
+         HBDiff = ifelse(TaggedPitchType == "FF" | TaggedPitchType == "FT", 0, HBDiff),
+         VAADiff = ifelse(TaggedPitchType == "FF" | TaggedPitchType == "FT", 0, VAADiff),
+         HAADiff = ifelse(TaggedPitchType == "FF" | TaggedPitchType == "FT", 0, HAADiff))
+
+```
+
+
+
+# Simplify data and include variables to be used in the model
+```{r}
+data_clean = subset(data9, select=c(Balls, Strikes, TaggedPitchType, PlateLocHeight, PlateLocSide, RelSpeed, InducedVertBreak, HorzBreak, VertApprAngle, HorzApprAngle, VertRelAngle, HorzRelAngle, SpinAxis, SpinEff, RelHeight, RelSide, Extension, SpinRate, In_Strike_Zone, mvmt.x, mvmt.z, VertBreak, TrueSpin, ZoneSpeed, ZoneTime, type, VeloDiff, IVBDiff, HBDiff, VAADiff, HAADiff))
+
+data_clean
+```
+
+
+# Prepare the data for the model
+```{r}
+swing_prep <- data_clean %>%
+  mutate(type = as.factor(type)) %>%
+  mutate_if(is.character, factor)
+
+swing_prep <- swing_prep %>%
+  mutate(In_Strike_Zone = as.factor(In_Strike_Zone))
+
+swing_prep <- swing_prep %>%
+  na.omit()
+
+```
+
+
+# Train/Test split
+```{r}
+x <- initial_split(swing_prep, prop = 0.7)
+train <- training(x)
+test  <- testing(x)
+```
+
+
+# Create recipe and establish the workflow
+```{r}
+xg_recipe <- recipe(type ~ ., data = train) %>%
+  step_nzv(all_predictors()) %>%
+  step_impute_mean(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+xgb_model <- boost_tree(
+  trees = 100) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+xgb_workflow_fit <- workflow() %>%
+  add_recipe(xg_recipe) %>%
+  add_model(xgb_model) %>% 
+  fit(train)
+
+```
+
+```{r}
+evaluate_models <- function(model_workflow, model_name){
+    # 1. Make Predictions
+score_train <- bind_cols(
+  predict(model_workflow,train, type="prob"), 
+  predict(model_workflow,train, type="class"),
+  train) %>% 
+  mutate(part = "train") 
+
+score_test <- bind_cols(
+  predict(model_workflow,test, type="prob"), 
+   predict(model_workflow,test, type="class"),
+  test) %>% 
+  mutate(part = "test") 
+
+options(yardstick.event_first = FALSE)
+
+bind_rows(score_train, score_test) %>%
+  group_by(part) %>%
+  metrics(type, .pred_1, estimate=.pred_class) %>%
+  pivot_wider(id_cols = part, names_from = .metric, values_from = .estimate) %>%
+  mutate(model_name = model_name) %>% print()
+
+# ROC Curve 
+bind_rows(score_train, score_test) %>%
+  group_by(part) %>%
+  roc_curve(truth=type, predicted=.pred_1) %>% 
+  autoplot() +
+  geom_vline(xintercept = 0.335,    
+             color = "red",
+             linetype = "longdash") +
+   geom_vline(xintercept = 0.335,    
+             color = "black",
+             linetype = "longdash") +
+   labs(title = model_name, x = "FPR(1 - specificity)", y = "TPR(recall)") -> roc_chart 
+
+  
+# operating range 0 - 10% 
+operating_range <- score_test %>%
+  roc_curve(type, .pred_1)  %>%
+  mutate(
+    fpr = round((1 - specificity), 3),
+    tpr = round(sensitivity, 3),
+    score_threshold =  round(.threshold, 3)
+  ) %>%
+  group_by(fpr) %>%
+  summarise(threshold = round(mean(score_threshold),3),
+            tpr = mean(tpr)) %>%
+  filter(fpr <= 0.1)
+# operating range table 
+print(operating_range)
+ 
+  print(roc_chart)
+# Score Distribution 
+score_test %>%
+  ggplot(aes(.pred_1,fill=type)) +
+  geom_histogram(bins=50) +
+  geom_vline(aes(xintercept=.5, color="red")) +
+  geom_vline(aes(xintercept=.3, color="green")) +
+  geom_vline(aes(xintercept=.7, color="blue")) +
+  labs(title = model_name) -> score_dist 
+1321
+print(score_dist)
+
+    
+  
+}
+
+evaluate_models(xgb_workflow_fit, "XGBoost")
+
+```
+
+
+# Save RDS
+```{r}
+saveRDS(xgb_workflow_fit, "Final_Swing_Model_Updated.rds")
+```
+
+
+# PREDICTIONS AND ADDING NEW DATA
+
+# Predict on a dataset and join it back to the original 
+```{r}
+# Enter new dataset:
+
+#data <- read.csv("") %>% clean_names()
+
+#data
+
+
+# Change character variables in the dataset you are using to factors and created a new dataframe:
+
+#New_Dataset <- #Original_Dataset %>%
+  mutate_if(is.character, factor) %>%
+  mutate(in_strike_zone = as.factor(In_Strike_Zone))
+
+# Add workflow and new dataset to predict on
+# Predicting on the unique pitch id (PitchUID) and probability that a swing occurs (.pred_TRUE)
+# Optional to create a csv ending with ".csv" and name it whatever necessary
+
+pred <- predict(xgb_workflow_fit, #New_Dataset, type = "prob")  %>%
+  bind_cols(#New_Dataset) %>%
+  select(PitchUID,event_label = .pred_TRUE) %>% 
+  rename(swing_prob = event_label)# Optional write to a csv file %>% write_csv("#Enter name here of dataset.csv")
+  
+# Inner join back to the original dataset
+
+final <- #Original_Dataset %>% inner_join(pred, by="PitchUID")
+  
+# Create a new csv with the swing probabilities added
+  
+final %>% #write.csv("Enter name of dataset.csv")
+  
+saveRDS(xgb_workflow_fit, "Final_Swing_Model.rds")
+  
+```
+
+
+
+
+```{r}
+train_cv_foldsrf <- vfold_cv(train, v=5)
+train_cv_foldsrf
+
+rf_recipe <- recipe(type ~ ., data = train) %>%
+  step_nzv(all_predictors()) %>%
+  step_impute_mean(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+rf_model <- rand_forest(
+    trees  = tune(),
+    min_n = tune(),
+   ) %>% 
+      set_engine("ranger", importance = "impurity") %>% 
+      set_mode("classification")
+
+rf_workflow <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(rf_model) 
+
+tune_grid <- grid_regular(trees(c(100,200)),
+                          min_n(),
+                          levels = 5)
+
+print(tune_grid)
+
+tune_grid <- grid_random(trees(c(100,200)),
+                         min_n(),
+                          size = 5)
+print(tune_grid)
+
+all_cores <- detectCores(logical = TRUE)
+sprintf("# of Logical Cores: %d", all_cores)
+cl <- makeCluster(all_cores)
+registerDoParallel(cl)
+
+rf_tuning_results <- rf_workflow %>% 
+  tune_grid(
+    resamples = train_cv_foldsrf,
+    grid = tune_grid,
+    control = control_resamples(save_pred = TRUE)
+    )
+
+rf_tuning_resultstrain_cv_foldsrf <- vfold_cv(train, v=5)
+train_cv_foldsrf
+
+rf_recipe <- recipe(type ~ ., data = train) %>%
+  step_nzv(all_predictors()) %>%
+  step_impute_mean(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+rf_model <- rand_forest(
+    trees  = tune(),
+    min_n = tune(),
+   ) %>% 
+      set_engine("ranger", importance = "impurity") %>% 
+      set_mode("classification")
+
+rf_workflow <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(rf_model) 
+
+tune_grid <- grid_regular(trees(c(100,200)),
+                          min_n(),
+                          levels = 5)
+
+print(tune_grid)
+
+tune_grid <- grid_random(trees(c(100,200)),
+                         min_n(),
+                          size = 5)
+print(tune_grid)
+
+all_cores <- detectCores(logical = TRUE)
+sprintf("# of Logical Cores: %d", all_cores)
+cl <- makeCluster(all_cores)
+registerDoParallel(cl)
+
+rf_tuning_results <- rf_workflow %>% 
+  tune_grid(
+    resamples = train_cv_foldsrf,
+    grid = tune_grid,
+    control = control_resamples(save_pred = TRUE)
+    )
+
+rf_tuning_results
+```
+

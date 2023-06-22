@@ -1,0 +1,42 @@
+```{r}
+library(dplyr)
+
+data <- readRDS("/Users/kephi/Desktop/Wake Forest Baseball Analytcs/tmAll_ACCSEC copy.RDS")
+
+table(data$TaggedPitchType)
+
+data %>%
+  filter(TaggedPitchType == "FF") %>% 
+  filter(Tilt == "1:00:00") %>%
+  select(TaggedPitchType, PitcherThrows, Tilt, SpinAxis) %>%
+  arrange(desc(SpinAxis))
+
+```
+
+```{r}
+
+data$PitchClass <- ifelse(data$TaggedPitchType == "CH", "CH",
+                   ifelse(data$TaggedPitchType == "SL", "SL",
+                   ifelse(data$TaggedPitchType == "CB","CB",
+                   ifelse(data$TaggedPitchType == "SL" &
+                          data$RelSpeed >= 84.0000 &
+                          data$InducedVertBreak >= 4.0000, "CT",
+                    ifelse(data$PitcherThrows == "Right" & data$TaggedPitchType == "FF"
+                           & data$HorzBreak < 0.0000, "CT",
+                    ifelse(data$PitcherThrows == "Left" & data$TaggedPitchType == "FF"
+                           & data$HorzBreak > 0.0000, "CT",
+                    ifelse(data$PitcherThrows == "Right" & data$TaggedPitchType == "FF" |                                   data$TaggedPitchType == "FT" & data$SpinAxis <= 229.0000, "FF",
+                    ifelse(data$PitcherThrows == "Right" & data$TaggedPitchType == "FF" |                                   data$TaggedPitchType == "FT" & data$SpinAxis >= 237.0000, "FT",
+                    ifelse(data$PitcherThrows == "Left" & data$TaggedPitchType == "FF" |                                   data$TaggedPitchType == "FT" & data$SpinAxis >= 229.0000, "FT",
+                    ifelse(data$PitcherThrows == "Left" & data$TaggedPitchType == "FF" |                                   data$TaggedPitchType == "FT" & data$SpinAxis <= 237.0000, "FT", "FF"))))))))))
+
+data %>%
+  select(PitchClass)
+
+table(data$PitchClass)
+
+```
+
+
+
+

@@ -1,0 +1,147 @@
+```{r}
+library(dplyr)
+library(janitor)
+library(readr)
+library(tidyverse)
+library(tidymodels)
+library(glmnet)  
+library(rpart.plot) 
+library(vtable)
+library(tidyverse)
+library(tidymodels)
+library(janitor)
+library(vip)
+
+```
+
+# Data
+```{r}
+data <- readRDS("/Users/kephi/Desktop/tmAll_ACCSEC.RDS") %>%
+  filter(PitchCall == "BallCalled" | PitchCall == "StrikeCalled")
+data$Balls <- as.numeric(data$Balls)
+data$Strikes <- as.numeric(data$Strikes)
+
+today <- readRDS("/Users/kephi/Desktop/wakeData.RDS") %>%
+  filter(PitchCall == "BallCalled" | PitchCall == "StrikeCalled")
+today$Balls <- as.numeric(today$Balls)
+today$Strikes <- as.numeric(today$Strikes)
+```
+
+# Correct Call Binary
+```{r}
+data <- data %>%
+  mutate(CorrectCall = ifelse(PitchCall == "StrikeCalled" & (((PlateLocSide < 0.8333 & PlateLocSide > -1) & (PlateLocHeight > 1.5 & PlateLocHeight < 3.25) & BatterSide == "Right") | ((PlateLocSide < 1 & PlateLocSide > -0.8333) & (PlateLocHeight > 1.5 & PlateLocHeight < 3.25) & BatterSide == "Left")), 1,0),
+         CorrectCall = ifelse(PitchCall == "BallCalled" & (((PlateLocSide > 0.8333 | PlateLocSide < -1 | PlateLocHeight < 1.5 | PlateLocHeight > 3.25) & BatterSide == "Right") | ((PlateLocSide > 1 | PlateLocSide < -0.8333 | PlateLocHeight < 1.5 | PlateLocHeight > 3.25) & BatterSide == "Left")), 1, CorrectCall))
+```
+
+
+# XGBoost
+```{r}
+# Prep
+
+data_prep2 = subset(data, select=c(CorrectCall, PlateLocSide, PlateLocHeight, BatterSide, Balls, Strikes, RelHeight, RelSide, PitchofPA))
+
+data_prep2
+
+correct_prep <- data_prep2 %>%
+  mutate(CorrectCall = as.factor(CorrectCall)) %>%
+  mutate_if(is.character, factor)
+
+correct_prep <- correct_prep %>%
+  na.omit()
+
+# Split
+
+xG <- initial_split(correct_prep, prop = 0.7)
+trainG <- training(xG)
+testG  <- testing(xG)
+
+# Recipe and Workflow
+
+xg_recipe <- recipe(CorrectCall ~ ., data=trainG) %>%
+  step_nzv(all_predictors()) %>%
+  step_impute_mean(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+xgb_model <- boost_tree(
+  trees = 500) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+xgb_workflow_fit_correct <- workflow() %>%
+  add_recipe(xg_recipe) %>%
+  add_model(xgb_model) %>% 
+  fit(trainG)
+
+# Scored
+
+scored_trainG <- predict(xgb_workflow_fit_correct, trainG, type="prob") %>%
+    bind_cols(predict(xgb_workflow_fit_correct, trainG, type="class")) %>%
+    bind_cols(.,trainG)
+
+scored_trainG
+
+
+scored_testG <- predict(xgb_workflow_fit_correct, testG, type="prob") %>%
+      bind_cols(predict(xgb_workflow_fit_correct,  testG, type="class")) %>%
+       bind_cols(., testG)
+
+scored_testG
+
+# Metrics
+
+options(yardstick.event_first = FALSE)
+
+  scored_trainG %>% 
+    metrics(CorrectCall, .pred_1, estimate = .pred_class) %>%
+    mutate(part="training") %>%
+    bind_rows( scored_testG %>% 
+                 metrics(CorrectCall, .pred_1, estimate = .pred_class) %>%
+                 mutate(part="testing") ) %>%
+    filter(.metric %in% c('accuracy','roc_auc')) %>%
+    pivot_wider(names_from = .metric, values_from=.estimate)
+
+scored_trainG %>%
+  precision(CorrectCall,.pred_class) %>%
+  mutate(part="training") %>%
+  bind_rows(
+  scored_testG %>%
+  precision(CorrectCall,.pred_class) %>%
+    mutate(part="testing") 
+  )
+
+scored_trainG %>%
+  recall(CorrectCall,.pred_class) %>%
+  mutate(part="training") %>%
+  bind_rows(
+  scored_testG %>%
+  recall(CorrectCall,.pred_class) %>%
+    mutate(part="testing") 
+  )
+
+scored_trainG %>%
+  conf_mat(
+  truth = CorrectCall,
+  estimate = .pred_class,
+  dnn = c("Prediction", "Truth")
+) %>%
+  autoplot(type = "heatmap") + 
+  labs(title="Training Confusion Matrix")
+
+scored_testG %>%
+  conf_mat(
+  truth = CorrectCall,
+  estimate = .pred_class,
+  dnn = c("Prediction", "Truth")
+) %>%
+  autoplot(type = "heatmap") + 
+  labs(title="Testing Confusion Matrix")
+
+```
+
+```{r}
+saveRDS(xgb_workflow_fit_correct, "CorrectCall_FinalXGBoost.rds")
+```
+
+
