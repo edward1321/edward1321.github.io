@@ -1,2 +1,2 @@
-# edward1321.github.io
+# KylePhillips.github.io
 Kyle's Website
